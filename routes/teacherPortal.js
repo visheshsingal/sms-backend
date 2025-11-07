@@ -22,9 +22,32 @@ router.get('/assigned-class', auth, async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ userId: req.user.id });
     if (!teacher) return res.status(404).json({ message: 'Teacher not found' });
-    const cls = await Class.findOne({ teacher: teacher._id }).populate('students', 'firstName lastName rollNumber');
-    res.json(cls || {});
+
+    // Find classes where this teacher appears in any subject.teachers
+    const classes = await Class.find({ 'subjects.teachers': teacher._id }).populate('students', 'firstName lastName rollNumber');
+    // Return the first class (for compatibility with previous single-class assumption)
+    res.json(classes && classes.length ? classes[0] : {});
   } catch (err) { res.status(500).json({ message: 'Server error' }); }
+});
+
+// Get classes and subjects this teacher teaches (across classes)
+router.get('/teaching-classes', auth, async (req, res) => {
+  try {
+    const teacher = await Teacher.findOne({ userId: req.user.id });
+    if (!teacher) return res.status(404).json({ message: 'Teacher not found' });
+
+    // Find classes where this teacher appears in any subject.teachers
+    const classes = await Class.find({ 'subjects.teachers': teacher._id }).select('name subjects').populate('subjects.teachers', 'firstName lastName');
+
+    // For each class, filter subjects to only those taught by this teacher
+    const result = classes.map((c) => ({
+      _id: c._id,
+      name: c.name,
+      subjects: (c.subjects || []).filter(s => (s.teachers || []).some(t => String(t._id) === String(teacher._id))).map(s => ({ name: s.name }))
+    }));
+
+    res.json(result);
+  } catch (err) { console.error('GET /teacher/teaching-classes error:', err); res.status(500).json({ message: 'Server error' }); }
 });
 
 // Get attendance for assigned class (optional date range)
@@ -32,7 +55,8 @@ router.get('/assigned-class/attendance', auth, async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ userId: req.user.id });
     if (!teacher) return res.status(404).json({ message: 'Teacher not found' });
-    const cls = await Class.findOne({ teacher: teacher._id });
+    const classes = await Class.find({ 'subjects.teachers': teacher._id });
+    const cls = classes && classes.length ? classes[0] : null;
     if (!cls) return res.status(404).json({ message: 'Class not assigned' });
 
     const { startDate, endDate } = req.query;
@@ -66,7 +90,8 @@ router.get('/assignments', auth, async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ userId: req.user.id });
     if (!teacher) return res.status(404).json({ message: 'Teacher not found' });
-    const cls = await Class.findOne({ teacher: teacher._id });
+    const classes = await Class.find({ 'subjects.teachers': teacher._id });
+    const cls = classes && classes.length ? classes[0] : null;
     if (!cls) return res.json([]);
     const assignments = await Assignment.find({ classId: cls._id }).sort({ createdAt: -1 });
     res.json(assignments);

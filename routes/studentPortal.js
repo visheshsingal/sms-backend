@@ -11,12 +11,26 @@ const mongoose = require('mongoose');
 // Helper: find student by linked userId; if not found, try to match by email==username and link automatically
 async function resolveStudentForUser(user){
   // try by userId
-  let student = await Student.findOne({ userId: user._id }).populate({ path: 'class', populate: [{ path: 'teacher', select: 'firstName lastName' }, { path: 'students', select: 'firstName lastName rollNumber' }] });
+  // populate the student's class with students and per-subject teachers (class-level 'teacher' was removed)
+  let student = await Student.findOne({ userId: user._id }).populate({
+    path: 'class',
+    populate: [
+      { path: 'students', select: 'firstName lastName rollNumber' },
+      // populate teachers for each subject (subjects -> teachers)
+      { path: 'subjects.teachers', select: 'firstName lastName' }
+    ]
+  });
   if (student) return student;
 
   // fallback: try to find by email matching username and link
   if (user.username) {
-  student = await Student.findOne({ email: user.username }).populate({ path: 'class', populate: [{ path: 'teacher', select: 'firstName lastName' }, { path: 'students', select: 'firstName lastName rollNumber' }] });
+    student = await Student.findOne({ email: user.username }).populate({
+      path: 'class',
+      populate: [
+        { path: 'students', select: 'firstName lastName rollNumber' },
+        { path: 'subjects.teachers', select: 'firstName lastName' }
+      ]
+    });
     if (student) {
       student.userId = user._id;
       try { await student.save(); console.log(`Linked existing Student(${student._id}) to User(${user._id}) by email`); } catch(err){ console.warn('Failed to link student to user:', err.message); }

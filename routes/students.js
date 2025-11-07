@@ -79,7 +79,7 @@ router.post('/', auth, async (req, res) => {
       } else {
         try {
           const hash = await bcrypt.hash(password, 10);
-          user = new User({ username, passwordHash: hash, role: 'student' });
+          user = new User({ username, passwordHash: hash, role: 'student', email: `${username}@noemail.local` });
           await user.save();
         } catch (uerr) {
           console.error('Error creating user for student:', uerr);

@@ -25,9 +25,15 @@ app.use('/api/admin/finance', require('./routes/finance'));
 app.use('/api/admin/reports', require('./routes/reports'));
 app.use('/api/admin/classes', require('./routes/classes'));
 app.use('/api/admin/notices', require('./routes/notices'));
+app.use('/api/admin/routes', require('./routes/routes'));
+// new admin routes for drivers and buses
+app.use('/api/admin/drivers', require('./routes/drivers'));
+app.use('/api/admin/buses', require('./routes/buses'));
 app.use('/api/attendance', require('./routes/attendance'));
 app.use('/api/teacher', require('./routes/teacherPortal'));
 app.use('/api/student', require('./routes/studentPortal'));
+// driver portal for logged-in drivers
+app.use('/api/driver', require('./routes/driverPortal'));
 app.use('/api/leaves', require('./routes/leaves'));
 
 app.listen(PORT, () => console.log(`Server listening on ${PORT}`));

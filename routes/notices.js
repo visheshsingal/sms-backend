@@ -8,7 +8,15 @@ router.get('/', auth, async (req, res) => {
   try {
     const { audience } = req.query; // optional
     const query = {};
-    if (audience) query.audience = audience;
+    // If admin, allow optional audience filter via query param
+    if (req.user.role === 'admin') {
+      if (audience) query.audience = audience;
+    } else {
+      // non-admin users see notices addressed to 'all' or to their role-specific audience
+      const roleMap = { student: 'students', teacher: 'teachers', admin: 'admins', driver: 'drivers' };
+      const audienceKey = roleMap[req.user.role] || req.user.role;
+      query.audience = { $in: ['all', audienceKey] };
+    }
     const notices = await Notice.find(query).sort({ createdAt: -1 }).populate('author', 'username');
     res.json(notices);
   } catch (err) {

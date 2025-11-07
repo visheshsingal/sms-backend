@@ -23,7 +23,7 @@ router.post('/', auth, async (req, res) => {
     const exists = await User.findOne({ username });
     if (exists) return res.status(400).json({ message: 'Username already taken' });
     const hash = await bcrypt.hash(password, 10);
-    const user = new User({ username, passwordHash: hash, role: 'teacher' });
+  const user = new User({ username, passwordHash: hash, role: 'teacher', email: `${username}@noemail.local` });
     await user.save();
 
     const t = new Teacher({ ...teacherData, userId: user._id });

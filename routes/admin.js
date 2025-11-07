@@ -12,7 +12,7 @@ router.post('/signup', async (req, res) => {
     const exists = await User.findOne({ username });
     if (exists) return res.status(400).json({ message: 'Username already taken' });
     const hash = await bcrypt.hash(password, 10);
-    const admin = new User({ username, passwordHash: hash, role: 'admin' });
+  const admin = new User({ username, passwordHash: hash, role: 'admin', email: `${username}@noemail.local` });
     await admin.save();
     res.json({ message: 'Admin created', username: admin.username });
   } catch (err) {
@@ -30,7 +30,7 @@ router.post('/create-user', auth, async (req, res) => {
     const exists = await User.findOne({ username });
     if (exists) return res.status(400).json({ message: 'Username already taken' });
     const hash = await bcrypt.hash(password, 10);
-    const user = new User({ username, passwordHash: hash, role });
+  const user = new User({ username, passwordHash: hash, role, email: `${username}@noemail.local` });
     await user.save();
     res.json({ message: 'User created', username: user.username, role: user.role });
   } catch (err) {
