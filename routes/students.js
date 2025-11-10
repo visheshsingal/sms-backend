@@ -22,11 +22,24 @@ router.post('/', auth, async (req, res) => {
   try {
     // Accept optional username/password for student auth account.
     // If provided, create a User; otherwise create Student without userId.
-    const { username, password, ...studentData } = req.body;
+    let { username, password, ...studentData } = req.body;
+
+    // If admin provided a password but no username, try to derive a safe username
+    // from the student's email local-part so admins can create login using only email+password.
+    if (password && !username) {
+      if (studentData.email) {
+        username = (studentData.email.split('@')[0] || '').replace(/[^a-zA-Z0-9._-]/g, '').toLowerCase();
+      }
+    }
 
     // If `class` is provided as a name (string) try to resolve to Class._id
+    // Also sanitize empty strings so Mongoose doesn't attempt to cast "" to ObjectId
     const mongoose = require('mongoose')
     const Class = require('../models/Class')
+    if (studentData.class === '') {
+      // treat empty string as no class selected
+      delete studentData.class
+    }
     if (studentData.class && typeof studentData.class === 'string'){
       if (!mongoose.Types.ObjectId.isValid(studentData.class)){
         // try to find class by name
@@ -59,13 +72,13 @@ router.post('/', auth, async (req, res) => {
       return res.status(400).json({ message: 'Failed to create student', error: err.message, details: err.errors || null });
     }
 
-    // If username/password provided, create or link User and attach to student
+    // If username/password provided (or password provided and username derived), create or link User and attach to student
     let user = null;
     if (username || password) {
       if (!username || !password) {
         // cleanup created student
         await Student.findByIdAndDelete(s._id).catch(()=>{});
-        return res.status(400).json({ message: 'Both username and password are required to create a login for student' });
+        return res.status(400).json({ message: 'Both username and password are required to create a login for student. Provide an email or username and a password.' });
       }
       const exists = await User.findOne({ username });
       if (exists) {
@@ -79,7 +92,7 @@ router.post('/', auth, async (req, res) => {
       } else {
         try {
           const hash = await bcrypt.hash(password, 10);
-          user = new User({ username, passwordHash: hash, role: 'student', email: `${username}@noemail.local` });
+          user = new User({ username, passwordHash: hash, role: 'student', email: studentData.email || `${username}@noemail.local` });
           await user.save();
         } catch (uerr) {
           console.error('Error creating user for student:', uerr);
@@ -121,17 +134,55 @@ router.get('/:id', auth, async (req, res) => {
 router.put('/:id', auth, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
   try {
-    // if updating class by name, resolve it
-    const update = { ...req.body }
+    // allow updating username/password for the linked User account
+  const { username, password, ...update } = req.body;
+  // sanitize empty class values to avoid ObjectId cast errors
+  if (update.class === '') delete update.class;
     const mongoose = require('mongoose')
     const Class = require('../models/Class')
     if (update.class && typeof update.class === 'string' && !mongoose.Types.ObjectId.isValid(update.class)){
       const cls = await Class.findOne({ name: update.class })
       if (cls) update.class = cls._id
     }
-    const s = await Student.findByIdAndUpdate(req.params.id, update, { new: true });
-    if (!s) return res.status(404).json({ message: 'Not found' });
-    res.json(s);
+
+    const student = await Student.findById(req.params.id);
+    if (!student) return res.status(404).json({ message: 'Not found' });
+
+    // Handle username/password updates
+    if (username || password) {
+      let user = null;
+      if (student.userId) user = await User.findById(student.userId);
+
+      // If username provided, ensure it's not taken by another user
+          if (username) {
+        const existing = await User.findOne({ username });
+        if (existing && (!user || existing._id.toString() !== user._id.toString())) {
+          return res.status(400).json({ message: 'Username already taken' });
+        }
+        if (user) {
+          user.username = username;
+        } else {
+          // creating a new user for this student requires a password
+          if (!password) return res.status(400).json({ message: 'Password required when creating new user' });
+          const hash = await bcrypt.hash(password, 10);
+          user = new User({ username, passwordHash: hash, role: 'student', email: student.email || `${username}@noemail.local` });
+          await user.save();
+          student.userId = user._id;
+        }
+      }
+
+      // If password provided and user exists, update it
+      if (password && user) {
+        user.passwordHash = await bcrypt.hash(password, 10);
+      }
+
+      if (user) await user.save();
+    }
+
+    // Apply other updates to the student document
+    Object.assign(student, update);
+    await student.save();
+    res.json(student);
   } catch (err) { res.status(400).json({ message: 'Bad request', error: err.message }); }
 });
 

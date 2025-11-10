@@ -24,7 +24,8 @@ router.get('/assigned-class', auth, async (req, res) => {
     if (!teacher) return res.status(404).json({ message: 'Teacher not found' });
 
     // Find classes where this teacher appears in any subject.teachers
-    const classes = await Class.find({ 'subjects.teachers': teacher._id }).populate('students', 'firstName lastName rollNumber');
+  // include email so teacher UI can display student emails
+  const classes = await Class.find({ 'subjects.teachers': teacher._id }).populate('students', 'firstName lastName rollNumber email');
     // Return the first class (for compatibility with previous single-class assumption)
     res.json(classes && classes.length ? classes[0] : {});
   } catch (err) { res.status(500).json({ message: 'Server error' }); }
@@ -83,6 +84,43 @@ router.post('/assignments', auth, async (req, res) => {
     await a.save();
     res.json(a);
   } catch (err) { res.status(400).json({ message: 'Bad request', error: err.message }); }
+});
+
+// Update assignment (teacher who created it)
+router.put('/assignments/:id', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'teacher') return res.status(403).json({ message: 'Forbidden' });
+    const teacher = await Teacher.findOne({ userId: req.user.id });
+    if (!teacher) return res.status(404).json({ message: 'Teacher not found' });
+
+    const assignment = await Assignment.findById(req.params.id);
+    if (!assignment) return res.status(404).json({ message: 'Assignment not found' });
+    if (String(assignment.createdBy) !== String(teacher._id)) return res.status(403).json({ message: 'Not allowed' });
+
+    const { title, description, dueDate, attachments } = req.body;
+    if (title !== undefined) assignment.title = title;
+    if (description !== undefined) assignment.description = description;
+    if (dueDate !== undefined) assignment.dueDate = dueDate;
+    if (attachments !== undefined) assignment.attachments = attachments;
+    await assignment.save();
+    res.json(assignment);
+  } catch (err) { console.error('PUT /teacher/assignments/:id error:', err); res.status(400).json({ message: 'Bad request', error: err.message }); }
+});
+
+// Delete assignment (teacher who created it)
+router.delete('/assignments/:id', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'teacher') return res.status(403).json({ message: 'Forbidden' });
+    const teacher = await Teacher.findOne({ userId: req.user.id });
+    if (!teacher) return res.status(404).json({ message: 'Teacher not found' });
+
+    const assignment = await Assignment.findById(req.params.id);
+    if (!assignment) return res.status(404).json({ message: 'Assignment not found' });
+    if (String(assignment.createdBy) !== String(teacher._id)) return res.status(403).json({ message: 'Not allowed' });
+
+    await Assignment.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Deleted' });
+  } catch (err) { console.error('DELETE /teacher/assignments/:id error:', err); res.status(500).json({ message: 'Server error' }); }
 });
 
 // Get assignments for teacher's class

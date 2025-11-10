@@ -13,6 +13,7 @@ const StopSchema = new mongoose.Schema({
 const RouteSchema = new mongoose.Schema({
   name: { type: String, required: true },
   startTime: { type: String, required: true }, // store as HH:MM
+  endTime: { type: String }, // optional end time (HH:MM) to form a timeslot
   startLocation: { type: String },
   bus: { type: mongoose.Schema.Types.ObjectId, ref: 'Bus' },
   stops: [StopSchema],

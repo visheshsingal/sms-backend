@@ -17,13 +17,25 @@ router.get('/', auth, async (req, res) => {
 router.post('/', auth, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
   try {
-    const { username, password, ...driverData } = req.body;
-
-    // Require credentials for driver accounts
-    if (!username || !password) return res.status(400).json({ message: 'username and password required for driver account' });
+    let { username, password, ...driverData } = req.body;
 
     // Basic validation for driver fields
     if (!driverData.firstName || !driverData.lastName) return res.status(400).json({ message: 'firstName and lastName are required' });
+
+    // If password provided but username missing, derive from email local-part
+    if (password && !username && driverData.email) {
+      username = (driverData.email.split('@')[0] || '').replace(/[^a-zA-Z0-9._-]/g, '').toLowerCase();
+    }
+
+    // If no credentials provided, create driver without linked User
+    if (!username && !password) {
+      const d = new Driver({ ...driverData });
+      await d.save();
+      return res.json(d);
+    }
+
+    // If either username or password present, both are required to create a login
+    if (!username || !password) return res.status(400).json({ message: 'Both username and password are required to create a login for driver' });
 
     // Check if a User with this username already exists
     const exists = await User.findOne({ username });
@@ -44,7 +56,7 @@ router.post('/', auth, async (req, res) => {
 
     // Create the User first (mirrors teachers route). If user creation succeeds, create Driver and link.
     const hash = await bcrypt.hash(password, 10);
-  const user = new User({ username, passwordHash: hash, role: 'driver', email: `${username}@noemail.local` });
+    const user = new User({ username, passwordHash: hash, role: 'driver', email: driverData.email || `${username}@noemail.local` });
     try {
       await user.save();
     } catch (uerr) {
@@ -80,9 +92,52 @@ router.get('/:id', auth, async (req, res) => {
 router.put('/:id', auth, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
   try {
-    const d = await Driver.findByIdAndUpdate(req.params.id, req.body, { new: true });
-    if (!d) return res.status(404).json({ message: 'Not found' });
-    res.json(d);
+    const { username, password, ...update } = req.body;
+    const driver = await Driver.findById(req.params.id);
+    if (!driver) return res.status(404).json({ message: 'Not found' });
+
+    // Handle linked User account updates
+    if (username || password) {
+      let user = null;
+      if (driver.userId) user = await User.findById(driver.userId);
+
+      if (username) {
+        const existing = await User.findOne({ username });
+        if (existing && (!user || existing._id.toString() !== user._id.toString())) {
+          return res.status(400).json({ message: 'Username already taken' });
+        }
+        if (user) {
+          user.username = username;
+        } else {
+          if (!password) return res.status(400).json({ message: 'Password required when creating new user' });
+          const hash = await bcrypt.hash(password, 10);
+          user = new User({ username, passwordHash: hash, role: 'driver', email: driver.email || `${username}@noemail.local` });
+          await user.save();
+          driver.userId = user._id;
+        }
+      } else if (password && !username && !user) {
+        // derive username from email if not provided
+        if (driver.email) {
+          const derived = (driver.email.split('@')[0] || '').replace(/[^a-zA-Z0-9._-]/g, '').toLowerCase();
+          const hash = await bcrypt.hash(password, 10);
+          user = new User({ username: derived, passwordHash: hash, role: 'driver', email: driver.email });
+          await user.save();
+          driver.userId = user._id;
+        } else {
+          return res.status(400).json({ message: 'Email required to derive username when creating user without explicit username' });
+        }
+      }
+
+      if (password && user) {
+        user.passwordHash = await bcrypt.hash(password, 10);
+      }
+
+      if (user) await user.save();
+    }
+
+    Object.assign(driver, update);
+    await driver.save();
+    res.json(driver);
   } catch (err) { res.status(400).json({ message: 'Bad request', error: err.message }); }
 });
 

@@ -26,6 +26,7 @@ app.use('/api/admin/reports', require('./routes/reports'));
 app.use('/api/admin/classes', require('./routes/classes'));
 app.use('/api/admin/notices', require('./routes/notices'));
 app.use('/api/admin/routes', require('./routes/routes'));
+
 // new admin routes for drivers and buses
 app.use('/api/admin/drivers', require('./routes/drivers'));
 app.use('/api/admin/buses', require('./routes/buses'));

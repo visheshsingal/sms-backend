@@ -56,7 +56,29 @@ router.get('/me/assignments', auth, async (req, res) => {
     const student = await resolveStudentForUser(req.user);
     if (!student) return res.status(404).json({ message: 'Student not found' });
     const classId = student.class && student.class._id ? student.class._id : student.class;
-    const assignments = await Assignment.find({ classId }).sort({ createdAt: -1 }).populate('createdBy', 'firstName lastName');
+    // support month filtering via ?month=YYYY-MM or ?month=MM & ?year=YYYY
+    const { month } = req.query;
+    const q = { classId };
+    if (month) {
+      // month may be like '2025-11' or '11'
+      let start, end;
+      if (month.includes('-')) {
+        const [y, m] = month.split('-').map(Number);
+        start = new Date(y, m - 1, 1);
+        end = new Date(y, m, 0, 23, 59, 59, 999);
+      } else {
+        const m = Number(month);
+        const y = Number(req.query.year) || new Date().getFullYear();
+        start = new Date(y, m - 1, 1);
+        end = new Date(y, m, 0, 23, 59, 59, 999);
+      }
+      // include assignments due within month OR created within month
+      q.$or = [
+        { dueDate: { $gte: start, $lte: end } },
+        { createdAt: { $gte: start, $lte: end } }
+      ];
+    }
+    const assignments = await Assignment.find(q).sort({ createdAt: -1 }).populate('createdBy', 'firstName lastName');
     res.json(assignments);
   } catch (err) { console.error('GET /student/me/assignments error:', err); res.status(500).json({ message: 'Server error' }); }
 });
@@ -67,7 +89,24 @@ router.get('/me/timetable', auth, async (req, res) => {
     const student = await resolveStudentForUser(req.user);
     if (!student) return res.status(404).json({ message: 'Student not found' });
     const classId = student.class && student.class._id ? student.class._id : student.class;
-    const timetables = await Timetable.find({ classId }).sort({ createdAt: -1 }).populate('uploadedBy', 'firstName lastName');
+    // optional month filter
+    const { month } = req.query;
+    const q = { classId };
+    if (month) {
+      let start, end;
+      if (month.includes('-')) {
+        const [y, m] = month.split('-').map(Number);
+        start = new Date(y, m - 1, 1);
+        end = new Date(y, m, 0, 23, 59, 59, 999);
+      } else {
+        const m = Number(month);
+        const y = Number(req.query.year) || new Date().getFullYear();
+        start = new Date(y, m - 1, 1);
+        end = new Date(y, m, 0, 23, 59, 59, 999);
+      }
+      q.createdAt = { $gte: start, $lte: end };
+    }
+    const timetables = await Timetable.find(q).sort({ createdAt: -1 }).populate('uploadedBy', 'firstName lastName');
     res.json(timetables);
   } catch (err) { console.error('GET /student/me/timetable error:', err); res.status(500).json({ message: 'Server error' }); }
 });
