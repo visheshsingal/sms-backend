@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Student = require('../models/Student');
+const crypto = require('crypto');
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const auth = require('../middleware/auth');
@@ -61,6 +62,18 @@ router.post('/', auth, async (req, res) => {
     const s = new Student({ ...studentData });
     try {
       await s.save();
+      // generate a QR token automatically when a student is created
+      try {
+        const token = crypto.randomBytes(16).toString('hex');
+        const issuedAt = new Date();
+        const expires = new Date(issuedAt.getTime() + 365*24*60*60*1000);
+        s.qrToken = token;
+        s.qrTokenIssuedAt = issuedAt;
+        s.qrTokenExpires = expires;
+        await s.save();
+      } catch (qtErr) {
+        console.warn('Failed to auto-generate QR token for student:', qtErr.message);
+      }
       // If student has a class, ensure the class document references this student
       if (s.class) {
         try{

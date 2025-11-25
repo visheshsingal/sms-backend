@@ -36,5 +36,10 @@ app.use('/api/student', require('./routes/studentPortal'));
 // driver portal for logged-in drivers
 app.use('/api/driver', require('./routes/driverPortal'));
 app.use('/api/leaves', require('./routes/leaves'));
+// QR endpoints (generate, scan)
+app.use('/api/qr', require('./routes/qr'));
+
+// Temporary debug routes (remove in production)
+app.use('/api/debug', require('./routes/debug'));
 
 app.listen(PORT, () => console.log(`Server listening on ${PORT}`));

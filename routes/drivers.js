@@ -15,7 +15,12 @@ router.get('/', auth, async (req, res) => {
 
 // Create driver (admin only)
 router.post('/', auth, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
+  // Normalize role and provide clearer diagnostics when forbidden
+  const callerRole = req.user && req.user.role ? String(req.user.role).toLowerCase() : null;
+  if (callerRole !== 'admin') {
+    console.warn('Forbidden driver create attempt', { userId: req.user ? req.user._id : null, role: callerRole });
+    return res.status(403).json({ message: 'Forbidden' });
+  }
   try {
     let { username, password, ...driverData } = req.body;
 
@@ -90,7 +95,11 @@ router.get('/:id', auth, async (req, res) => {
 
 // Update driver
 router.put('/:id', auth, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
+  const callerRoleUp = req.user && req.user.role ? String(req.user.role).toLowerCase() : null;
+  if (callerRoleUp !== 'admin') {
+    console.warn('Forbidden driver update attempt', { userId: req.user ? req.user._id : null, role: callerRoleUp });
+    return res.status(403).json({ message: 'Forbidden' });
+  }
   try {
     const { username, password, ...update } = req.body;
     const driver = await Driver.findById(req.params.id);
@@ -143,7 +152,11 @@ router.put('/:id', auth, async (req, res) => {
 
 // Delete driver
 router.delete('/:id', auth, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
+  const callerRoleDel = req.user && req.user.role ? String(req.user.role).toLowerCase() : null;
+  if (callerRoleDel !== 'admin') {
+    console.warn('Forbidden driver delete attempt', { userId: req.user ? req.user._id : null, role: callerRoleDel });
+    return res.status(403).json({ message: 'Forbidden' });
+  }
   try {
     const driver = await Driver.findById(req.params.id);
     if (!driver) return res.status(404).json({ message: 'Not found' });

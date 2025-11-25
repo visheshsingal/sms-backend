@@ -4,6 +4,8 @@ const Bus = require('../models/Bus');
 const Driver = require('../models/Driver');
 const Route = require('../models/Route');
 const auth = require('../middleware/auth');
+const BusAttendance = require('../models/BusAttendance');
+const StudentAttendance = require('../models/StudentAttendance');
 
 // List buses
 router.get('/', auth, async (req, res) => {
@@ -69,6 +71,62 @@ router.get('/:id/live', auth, async (req, res) => {
     if (!b) return res.status(404).json({ message: 'Not found' });
     res.json({ live: b.live || { active: false } });
   } catch (err) { res.status(500).json({ message: 'Server error' }); }
+});
+
+// Admin: get attendance records for a bus (optional date filter)
+router.get('/:id/attendance', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
+    const { id } = req.params;
+    const { startDate, endDate } = req.query;
+    const query = { busId: id };
+    if (startDate && endDate) query.date = { $gte: new Date(startDate), $lte: new Date(endDate) };
+    const recs = await BusAttendance.find(query).sort({ date: -1 }).populate('records.studentId', 'firstName lastName rollNumber');
+    res.json(recs);
+  } catch (err) { console.error(err); res.status(500).json({ message: 'Server error' }); }
+});
+
+// Admin: create / upsert attendance for a bus on a date
+router.post('/:id/attendance', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
+    const { id } = req.params;
+    const { date: dateIn, records } = req.body;
+    const dateIso = dateIn ? new Date(dateIn).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+    const date = new Date(dateIso + 'T00:00:00Z');
+    let ba = await BusAttendance.findOne({ busId: id, date });
+    if (ba){ ba.records = records; } else { ba = new BusAttendance({ busId: id, date, records }); }
+    await ba.save();
+
+    // write student attendance events (logs)
+    for (const r of (records || [])){
+      try{ const sae = new StudentAttendance({ studentId: r.studentId, classId: null, scannerId: req.user._id, scannerRole: 'admin', type: 'bus', timestamp: new Date(), rawPayload: { busId: id, date: date.toISOString(), status: r.status } }); await sae.save(); }catch(e){ console.warn('studentAttendance log error', e.message) }
+    }
+
+    res.json({ message: 'Saved', busAttendanceId: ba._id });
+  } catch (err) { console.error(err); res.status(500).json({ message: 'Server error', error: err.message }); }
+});
+
+// Admin: bus attendance report
+router.get('/:id/attendance/report', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
+    const { id } = req.params;
+    const { startDate, endDate } = req.query;
+    const query = { busId: id };
+    if (startDate && endDate) query.date = { $gte: new Date(startDate), $lte: new Date(endDate) };
+    const recs = await BusAttendance.find(query).sort({ date: -1 });
+    // collect students from bus route
+    const bus = await Bus.findById(id).populate({ path: 'route', populate: { path: 'stops.students', select: 'firstName lastName rollNumber' } });
+    const students = [];
+    if (bus && bus.route){ for (const stop of (bus.route.stops||[])) for (const s of (stop.students||[])) if (!students.find(x=>String(x._id)===String(s._id))) students.push(s); }
+    const report = students.map(student => {
+      const totalDays = recs.length;
+      const presentDays = recs.reduce((acc, rec)=>{ const r = (rec.records||[]).find(rr=>String(rr.studentId)===String(student._id)); return acc + (r && r.status==='present' ? 1 : 0); }, 0);
+      return { student: { _id: student._id, name: `${student.firstName||''} ${student.lastName||''}`.trim(), rollNo: student.rollNumber||'' }, totalDays, presentDays, percentage: totalDays ? (presentDays/totalDays)*100 : 0 };
+    });
+    res.json({ bus: { _id: bus._id, number: bus.number }, report, records: recs });
+  } catch (err) { console.error(err); res.status(500).json({ message: 'Server error' }); }
 });
 
 // Update bus

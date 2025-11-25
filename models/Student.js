@@ -11,6 +11,10 @@ const StudentSchema = new mongoose.Schema({
   rollNumber: { type: String, unique: true, sparse: true },
   // reference to Class model
   class: { type: mongoose.Schema.Types.ObjectId, ref: 'Class', required: false },
+  // QR token fields (optional)
+  qrToken: { type: String, required: false },
+  qrTokenIssuedAt: { type: Date, required: false },
+  qrTokenExpires: { type: Date, required: false },
   createdAt: { type: Date, default: Date.now }
 });
 
