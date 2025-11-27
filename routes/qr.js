@@ -176,6 +176,7 @@ router.post('/scan', auth, async (req, res) => {
 
 		// If driver scanned, also mark bus attendance for this student's bus (present)
 		let busAttendanceId = null;
+		let previousBusStatus = null;
 		if (scannerRole === 'driver'){
 			try{
 				// find driver and their bus
@@ -194,8 +195,10 @@ router.post('/scan', auth, async (req, res) => {
 						const sidStr = student._id.toString();
 						const idx = (ba.records||[]).findIndex(r => String(r.studentId) === sidStr);
 						if (idx >= 0){
+							previousBusStatus = ba.records[idx].status || null;
 							ba.records[idx].status = 'present';
 						} else {
+							previousBusStatus = null;
 							ba.records.push({ studentId: student._id, status: 'present' });
 						}
 						await ba.save();
@@ -208,6 +211,7 @@ router.post('/scan', auth, async (req, res) => {
 		// If teacher scanned, mark daily attendance in Attendance collection
 		let attendanceRecordId = null;
 		let attendanceDate = null;
+		let previousAttendanceStatus = null;
 		if (scannerRole === 'teacher'){
 			const classId = student.class ? (student.class._id ? student.class._id : student.class) : null;
 			if (!classId) return res.status(400).json({ message: 'Student not assigned to a class' });
@@ -225,8 +229,10 @@ router.post('/scan', auth, async (req, res) => {
 			const sidStr = student._id.toString();
 			const idx = att.records.findIndex(r => r.studentId && r.studentId.toString() === sidStr);
 			if (idx >= 0){
+				previousAttendanceStatus = att.records[idx].status || null;
 				att.records[idx].status = 'present';
 			} else {
+				previousAttendanceStatus = null;
 				att.records.push({ studentId: student._id, status: 'present' });
 			}
 
@@ -235,7 +241,7 @@ router.post('/scan', auth, async (req, res) => {
 			attendanceDate = att.date;
 		}
 
-		// return useful info to client for UI confirmation
+		// return useful info to client for UI confirmation, including previous statuses
 		return res.json({
 			message: 'Attendance recorded',
 			eventId: attendanceEvent._id,
@@ -248,7 +254,9 @@ router.post('/scan', auth, async (req, res) => {
 				className: student.class && student.class.name ? student.class.name : null
 			},
 			attendance: attendanceRecordId ? { attendanceId: attendanceRecordId, date: attendanceDate } : null,
-			busAttendanceId: busAttendanceId || null
+			busAttendanceId: busAttendanceId || null,
+			previousAttendanceStatus: previousAttendanceStatus || null,
+			previousBusAttendanceStatus: previousBusStatus || null
 		});
 	} catch (err) {
 		console.error(err);
