@@ -6,7 +6,7 @@ const UserSchema = new mongoose.Schema({
   email: { type: String, required: false },
   passwordHash: { type: String, required: true },
   // include 'driver' so driver accounts can be created without validation errors
-  role: { type: String, enum: ['admin', 'student', 'teacher', 'driver'], required: true },
+  role: { type: String, enum: ['admin', 'student', 'teacher', 'driver', 'bus-incharge'], required: true },
   createdAt: { type: Date, default: Date.now }
 });
 

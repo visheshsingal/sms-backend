@@ -35,13 +35,30 @@ router.post('/', auth, async (req, res) => {
     const { classId, date, records } = req.body;
 
     // Check if attendance already exists for this class and date
-    const existingAttendance = await Attendance.findOne({ 
+    const existingAttendance = await Attendance.findOne({
       classId,
       date: new Date(date)
     });
 
     if (existingAttendance) {
       return res.status(400).json({ msg: 'Attendance already marked for this date' });
+    }
+
+    // Role check: if teacher, must be class teacher
+    if (req.user.role === 'teacher') {
+      const Teacher = require('../models/Teacher');
+      const teacher = await Teacher.findOne({ userId: req.user.id });
+      const cls = await Class.findById(classId);
+      if (!teacher || !cls || String(cls.classTeacher) !== String(teacher._id)) {
+        return res.status(403).json({ msg: 'Only the Class Teacher can mark attendance for this class' });
+      }
+
+      // Restrict teacher to only mark attendance for the current date (server time)
+      const inputDate = new Date(date).setHours(0, 0, 0, 0);
+      const today = new Date().setHours(0, 0, 0, 0);
+      if (inputDate !== today) {
+        return res.status(400).json({ msg: 'Teachers can only mark attendance for the current date.' });
+      }
     }
 
     // Create new attendance record
@@ -52,7 +69,7 @@ router.post('/', auth, async (req, res) => {
     });
 
     await attendance.save();
-    
+
     // Populate student details before sending response
     const populatedAttendance = await Attendance.findById(attendance._id)
       .populate('records.studentId', 'firstName lastName rollNumber');
@@ -74,7 +91,21 @@ router.put('/:id', auth, async (req, res) => {
       return res.status(404).json({ msg: 'Attendance record not found' });
     }
 
+    if (req.user.role === 'teacher') {
+      const recordDate = new Date(attendance.date).setHours(0, 0, 0, 0);
+      const today = new Date().setHours(0, 0, 0, 0);
+      if (recordDate !== today) {
+        return res.status(403).json({ msg: 'Teachers can only modify attendance for the current date.' });
+      }
+    }
+
     attendance.records = records;
+    attendance.records.forEach(r => {
+      // ensure existing records retain their IDs if passed, or just use what's provided. 
+      // Mongoose subdocs handle this, but if client sends partial data it might regenerate _id.
+      // Assuming client sends complete records.
+    });
+
     await attendance.save();
 
     const populatedAttendance = await Attendance.findById(attendance._id)
@@ -127,7 +158,7 @@ router.get('/report/:classId', auth, async (req, res) => {
     const report = classData.students.map(student => {
       const totalDays = attendanceRecords.length;
       const presentDays = attendanceRecords.reduce((acc, record) => {
-        const studentRecord = record.records.find(r => 
+        const studentRecord = record.records.find(r =>
           r.studentId.toString() === student._id.toString()
         );
         return acc + (studentRecord?.status === 'present' ? 1 : 0);

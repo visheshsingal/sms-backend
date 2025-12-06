@@ -29,6 +29,11 @@ router.post('/login', async (req, res) => {
       if (!user) {
         const d = await Driver.findOne({ email });
         if (d && d.userId) user = await User.findById(d.userId);
+        if (!user) {
+          const BusIncharge = require('../models/BusIncharge');
+          const bi = await BusIncharge.findOne({ email });
+          if (bi && bi.userId) user = await User.findById(bi.userId);
+        }
       }
     }
   } else {

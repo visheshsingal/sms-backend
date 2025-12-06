@@ -11,6 +11,15 @@ const StudentSchema = new mongoose.Schema({
   rollNumber: { type: String, unique: true, sparse: true },
   // reference to Class model
   class: { type: mongoose.Schema.Types.ObjectId, ref: 'Class', required: false },
+
+  // New Fields
+  admissionDate: { type: Date },
+  admissionNumber: { type: String, unique: true, sparse: true },
+  aadharCard: { type: String, unique: true, sparse: true },
+  fatherName: { type: String },
+  reference: { type: String }, // optional
+  profileImage: { type: String }, // Cloudinary URL
+
   // QR token fields (optional)
   qrToken: { type: String, required: false },
   qrTokenIssuedAt: { type: Date, required: false },

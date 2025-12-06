@@ -9,6 +9,7 @@ const StudentAttendance = require('../models/StudentAttendance');
 
 // List buses
 router.get('/', auth, async (req, res) => {
+  if (req.user.role !== 'admin' && req.user.role !== 'bus-incharge') return res.status(403).json({ message: 'Forbidden' });
   try {
     const buses = await Bus.find().sort({ createdAt: -1 })
       .populate('driver', 'firstName lastName licenseNumber phone')
@@ -17,9 +18,9 @@ router.get('/', auth, async (req, res) => {
   } catch (err) { res.status(500).json({ message: 'Server error' }); }
 });
 
-// Create bus (admin only)
+// Create bus (admin or bus-incharge)
 router.post('/', auth, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
+  if (req.user.role !== 'admin' && req.user.role !== 'bus-incharge') return res.status(403).json({ message: 'Forbidden' });
   try {
     const { driver, ...busDataIn } = req.body;
     const busData = { ...busDataIn }
@@ -73,57 +74,68 @@ router.get('/:id/live', auth, async (req, res) => {
   } catch (err) { res.status(500).json({ message: 'Server error' }); }
 });
 
-// Admin: get attendance records for a bus (optional date filter)
+// Bus Attendance: get records (admin or bus-incharge)
 router.get('/:id/attendance', auth, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
+    if (req.user.role !== 'admin' && req.user.role !== 'bus-incharge') return res.status(403).json({ message: 'Forbidden' });
     const { id } = req.params;
-    const { startDate, endDate } = req.query;
+    const { startDate, endDate, session } = req.query;
     const query = { busId: id };
     if (startDate && endDate) query.date = { $gte: new Date(startDate), $lte: new Date(endDate) };
-    const recs = await BusAttendance.find(query).sort({ date: -1 }).populate('records.studentId', 'firstName lastName rollNumber');
+    if (session) query.session = session;
+    const recs = await BusAttendance.find(query).sort({ date: -1, session: 1 }).populate('records.studentId', 'firstName lastName rollNumber');
     res.json(recs);
   } catch (err) { console.error(err); res.status(500).json({ message: 'Server error' }); }
 });
 
-// Admin: create / upsert attendance for a bus on a date
+// Bus Attendance: update records (admin or bus-incharge)
 router.post('/:id/attendance', auth, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
+    if (req.user.role !== 'admin' && req.user.role !== 'bus-incharge') return res.status(403).json({ message: 'Forbidden' });
     const { id } = req.params;
-    const { date: dateIn, records } = req.body;
+    const { date: dateIn, records, session } = req.body;
+
+    // Default session to morning if not provided
+    const sess = session || 'morning';
+    if (!['morning', 'evening'].includes(sess)) return res.status(400).json({ message: 'Invalid session' });
+
     const dateIso = dateIn ? new Date(dateIn).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
     const date = new Date(dateIso + 'T00:00:00Z');
-    let ba = await BusAttendance.findOne({ busId: id, date });
-    if (ba){ ba.records = records; } else { ba = new BusAttendance({ busId: id, date, records }); }
+
+    let ba = await BusAttendance.findOne({ busId: id, date, session: sess });
+    if (ba) { ba.records = records; } else { ba = new BusAttendance({ busId: id, date, session: sess, records }); }
     await ba.save();
 
     // write student attendance events (logs)
-    for (const r of (records || [])){
-      try{ const sae = new StudentAttendance({ studentId: r.studentId, classId: null, scannerId: req.user._id, scannerRole: 'admin', type: 'bus', timestamp: new Date(), rawPayload: { busId: id, date: date.toISOString(), status: r.status } }); await sae.save(); }catch(e){ console.warn('studentAttendance log error', e.message) }
+    for (const r of (records || [])) {
+      try { const sae = new StudentAttendance({ studentId: r.studentId, classId: null, scannerId: req.user._id, scannerRole: req.user.role, type: 'bus', timestamp: new Date(), rawPayload: { busId: id, date: date.toISOString(), session: sess, status: r.status } }); await sae.save(); } catch (e) { console.warn('studentAttendance log error', e.message) }
     }
 
     res.json({ message: 'Saved', busAttendanceId: ba._id });
   } catch (err) { console.error(err); res.status(500).json({ message: 'Server error', error: err.message }); }
 });
 
-// Admin: bus attendance report
+// Bus Attendance: report (admin or bus-incharge)
 router.get('/:id/attendance/report', auth, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
+    if (req.user.role !== 'admin' && req.user.role !== 'bus-incharge') return res.status(403).json({ message: 'Forbidden' });
     const { id } = req.params;
-    const { startDate, endDate } = req.query;
+    const { startDate, endDate, session } = req.query;
     const query = { busId: id };
     if (startDate && endDate) query.date = { $gte: new Date(startDate), $lte: new Date(endDate) };
+    if (session) query.session = session;
+
     const recs = await BusAttendance.find(query).sort({ date: -1 });
     // collect students from bus route
     const bus = await Bus.findById(id).populate({ path: 'route', populate: { path: 'stops.students', select: 'firstName lastName rollNumber' } });
     const students = [];
-    if (bus && bus.route){ for (const stop of (bus.route.stops||[])) for (const s of (stop.students||[])) if (!students.find(x=>String(x._id)===String(s._id))) students.push(s); }
+    if (bus && bus.route) { for (const stop of (bus.route.stops || [])) for (const s of (stop.students || [])) if (!students.find(x => String(x._id) === String(s._id))) students.push(s); }
     const report = students.map(student => {
-      const totalDays = recs.length;
-      const presentDays = recs.reduce((acc, rec)=>{ const r = (rec.records||[]).find(rr=>String(rr.studentId)===String(student._id)); return acc + (r && r.status==='present' ? 1 : 0); }, 0);
-      return { student: { _id: student._id, name: `${student.firstName||''} ${student.lastName||''}`.trim(), rollNo: student.rollNumber||'' }, totalDays, presentDays, percentage: totalDays ? (presentDays/totalDays)*100 : 0 };
+      // Total potential sessions: unique dates * sessions per day? 
+      // Simplified: total count of attendance records found (each record is a session)
+      const totalSessions = recs.length;
+      const presentSessions = recs.reduce((acc, rec) => { const r = (rec.records || []).find(rr => String(rr.studentId) === String(student._id)); return acc + (r && r.status === 'present' ? 1 : 0); }, 0);
+      return { student: { _id: student._id, name: `${student.firstName || ''} ${student.lastName || ''}`.trim(), rollNo: student.rollNumber || '' }, totalSessions, presentSessions, percentage: totalSessions ? (presentSessions / totalSessions) * 100 : 0 };
     });
     res.json({ bus: { _id: bus._id, number: bus.number }, report, records: recs });
   } catch (err) { console.error(err); res.status(500).json({ message: 'Server error' }); }
@@ -131,7 +143,7 @@ router.get('/:id/attendance/report', auth, async (req, res) => {
 
 // Update bus
 router.put('/:id', auth, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
+  if (req.user.role !== 'admin' && req.user.role !== 'bus-incharge') return res.status(403).json({ message: 'Forbidden' });
   try {
     const update = { ...req.body };
     // NOTE: route assignment is handled from the Routes endpoints. Do not update route here.
@@ -173,7 +185,7 @@ router.put('/:id', auth, async (req, res) => {
 
 // Delete bus
 router.delete('/:id', auth, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
+  if (req.user.role !== 'admin' && req.user.role !== 'bus-incharge') return res.status(403).json({ message: 'Forbidden' });
   try {
     const bus = await Bus.findById(req.params.id);
     if (!bus) return res.status(404).json({ message: 'Not found' });

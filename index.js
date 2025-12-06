@@ -25,6 +25,8 @@ app.use('/api/admin/finance', require('./routes/finance'));
 app.use('/api/admin/reports', require('./routes/reports'));
 app.use('/api/admin/classes', require('./routes/classes'));
 app.use('/api/admin/notices', require('./routes/notices'));
+// Portal-level notices endpoints (for bell/unread/read)
+app.use('/api/notices', require('./routes/portalNotices'));
 app.use('/api/admin/routes', require('./routes/routes'));
 
 // new admin routes for drivers and buses
@@ -35,9 +37,12 @@ app.use('/api/teacher', require('./routes/teacherPortal'));
 app.use('/api/student', require('./routes/studentPortal'));
 // driver portal for logged-in drivers
 app.use('/api/driver', require('./routes/driverPortal'));
+app.use('/api/admin/bus-incharges', require('./routes/busIncharges'));
+app.use('/api/bus-incharge', require('./routes/busInchargePortal'));
 app.use('/api/leaves', require('./routes/leaves'));
 // QR endpoints (generate, scan)
 app.use('/api/qr', require('./routes/qr'));
+app.use('/api/upload', require('./routes/upload'));
 
 // Temporary debug routes (remove in production)
 app.use('/api/debug', require('./routes/debug'));

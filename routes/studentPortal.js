@@ -9,7 +9,7 @@ const auth = require('../middleware/auth');
 const mongoose = require('mongoose');
 
 // Helper: find student by linked userId; if not found, try to match by email==username and link automatically
-async function resolveStudentForUser(user){
+async function resolveStudentForUser(user) {
   // try by userId
   // populate the student's class with students and per-subject teachers (class-level 'teacher' was removed)
   let student = await Student.findOne({ userId: user._id }).populate({
@@ -33,7 +33,7 @@ async function resolveStudentForUser(user){
     });
     if (student) {
       student.userId = user._id;
-      try { await student.save(); console.log(`Linked existing Student(${student._id}) to User(${user._id}) by email`); } catch(err){ console.warn('Failed to link student to user:', err.message); }
+      try { await student.save(); console.log(`Linked existing Student(${student._id}) to User(${user._id}) by email`); } catch (err) { console.warn('Failed to link student to user:', err.message); }
       return student;
     }
   }
@@ -104,9 +104,12 @@ router.get('/me/timetable', auth, async (req, res) => {
         start = new Date(y, m - 1, 1);
         end = new Date(y, m, 0, 23, 59, 59, 999);
       }
-      q.createdAt = { $gte: start, $lte: end };
+      q.$or = [
+        { date: { $gte: start, $lte: end } },
+        { createdAt: { $gte: start, $lte: end } }
+      ];
     }
-    const timetables = await Timetable.find(q).sort({ createdAt: -1 }).populate('uploadedBy', 'firstName lastName');
+    const timetables = await Timetable.find(q).sort({ date: -1, createdAt: -1 }).populate('uploadedBy', 'firstName lastName');
     res.json(timetables);
   } catch (err) { console.error('GET /student/me/timetable error:', err); res.status(500).json({ message: 'Server error' }); }
 });
@@ -115,15 +118,15 @@ router.get('/me/timetable', auth, async (req, res) => {
 router.get('/me/attendance', auth, async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-  const student = await resolveStudentForUser(req.user);
-  if (!student) return res.status(404).json({ message: 'Student not found' });
-  const classId = student.class && student.class._id ? student.class._id : student.class;
+    const student = await resolveStudentForUser(req.user);
+    if (!student) return res.status(404).json({ message: 'Student not found' });
+    const classId = student.class && student.class._id ? student.class._id : student.class;
     if (!classId) return res.status(400).json({ message: 'Student not assigned to class' });
 
     const q = { classId };
     if (startDate && endDate) q.date = { $gte: new Date(startDate), $lte: new Date(endDate) };
 
-  const records = await Attendance.find(q);
+    const records = await Attendance.find(q);
     const totalDays = records.length;
     const presentDays = records.reduce((acc, rec) => {
       const r = rec.records.find(r => r.studentId.toString() === student._id.toString());
@@ -139,9 +142,9 @@ router.get('/me/attendance', auth, async (req, res) => {
 router.get('/me/attendance/report', auth, async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-  const student = await resolveStudentForUser(req.user);
-  if (!student) return res.status(404).json({ message: 'Student not found' });
-  const classId = student.class && student.class._id ? student.class._id : student.class;
+    const student = await resolveStudentForUser(req.user);
+    if (!student) return res.status(404).json({ message: 'Student not found' });
+    const classId = student.class && student.class._id ? student.class._id : student.class;
     if (!classId) return res.status(400).json({ message: 'Student not assigned to class' });
 
     const q = { classId };

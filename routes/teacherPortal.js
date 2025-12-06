@@ -23,9 +23,9 @@ router.get('/assigned-class', auth, async (req, res) => {
     const teacher = await Teacher.findOne({ userId: req.user.id });
     if (!teacher) return res.status(404).json({ message: 'Teacher not found' });
 
-    // Find classes where this teacher appears in any subject.teachers
-  // include email so teacher UI can display student emails
-  const classes = await Class.find({ 'subjects.teachers': teacher._id }).populate('students', 'firstName lastName rollNumber email');
+    // Find classes where this teacher is the designated Class Teacher
+    // include email so teacher UI can display student emails
+    const classes = await Class.find({ classTeacher: teacher._id }).populate('students', 'firstName lastName rollNumber email profileImage admissionNumber fatherName aadharCard');
     // Return the first class (for compatibility with previous single-class assumption)
     res.json(classes && classes.length ? classes[0] : {});
   } catch (err) { res.status(500).json({ message: 'Server error' }); }
@@ -37,8 +37,13 @@ router.get('/teaching-classes', auth, async (req, res) => {
     const teacher = await Teacher.findOne({ userId: req.user.id });
     if (!teacher) return res.status(404).json({ message: 'Teacher not found' });
 
-    // Find classes where this teacher appears in any subject.teachers
-    const classes = await Class.find({ 'subjects.teachers': teacher._id }).select('name subjects').populate('subjects.teachers', 'firstName lastName');
+    // Find classes where this teacher appears in any subject.teachers OR is the classTeacher
+    const classes = await Class.find({
+      $or: [
+        { 'subjects.teachers': teacher._id },
+        { 'classTeacher': teacher._id }
+      ]
+    }).select('name subjects classTeacher').populate('subjects.teachers', 'firstName lastName');
 
     // For each class, filter subjects to only those taught by this teacher
     const result = classes.map((c) => ({
@@ -56,7 +61,7 @@ router.get('/assigned-class/attendance', auth, async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ userId: req.user.id });
     if (!teacher) return res.status(404).json({ message: 'Teacher not found' });
-    const classes = await Class.find({ 'subjects.teachers': teacher._id });
+    const classes = await Class.find({ classTeacher: teacher._id });
     const cls = classes && classes.length ? classes[0] : null;
     if (!cls) return res.status(404).json({ message: 'Class not assigned' });
 
@@ -123,27 +128,47 @@ router.delete('/assignments/:id', auth, async (req, res) => {
   } catch (err) { console.error('DELETE /teacher/assignments/:id error:', err); res.status(500).json({ message: 'Server error' }); }
 });
 
-// Get assignments for teacher's class
+// Get assignments for teacher's class(es)
 router.get('/assignments', auth, async (req, res) => {
   try {
     const teacher = await Teacher.findOne({ userId: req.user.id });
     if (!teacher) return res.status(404).json({ message: 'Teacher not found' });
-    const classes = await Class.find({ 'subjects.teachers': teacher._id });
-    const cls = classes && classes.length ? classes[0] : null;
-    if (!cls) return res.json([]);
-    const assignments = await Assignment.find({ classId: cls._id }).sort({ createdAt: -1 });
+
+    // Find all classes where this teacher teaches or is class teacher
+    const classes = await Class.find({
+      $or: [
+        { 'subjects.teachers': teacher._id },
+        { 'classTeacher': teacher._id }
+      ]
+    });
+
+    if (!classes.length) return res.json([]);
+    const classIds = classes.map(c => c._id);
+
+    // Sort by createdAt desc
+    const assignments = await Assignment.find({ classId: { $in: classIds } })
+      .sort({ createdAt: -1 })
+      .populate('classId', 'name');
     res.json(assignments);
-  } catch (err) { res.status(500).json({ message: 'Server error' }); }
+  } catch (err) { console.error(err); res.status(500).json({ message: 'Server error' }); }
 });
 
-// Timetable: upload simple content/url
+// Timetable: upload
 router.post('/timetable', auth, async (req, res) => {
   try {
     if (req.user.role !== 'teacher') return res.status(403).json({ message: 'Forbidden' });
     const teacher = await Teacher.findOne({ userId: req.user.id });
-    const { classId, content } = req.body;
-    if (!classId || !content) return res.status(400).json({ message: 'classId and content required' });
-    const t = new Timetable({ classId, content, uploadedBy: teacher ? teacher._id : undefined });
+    const { classId, content, imageUrl, date } = req.body;
+
+    if (!classId || (!content && !imageUrl)) return res.status(400).json({ message: 'classId and content or image required' });
+
+    const t = new Timetable({
+      classId,
+      content,
+      imageUrl,
+      date: date || new Date(),
+      uploadedBy: teacher ? teacher._id : undefined
+    });
     await t.save();
     res.json(t);
   } catch (err) { res.status(400).json({ message: 'Bad request', error: err.message }); }
@@ -151,18 +176,27 @@ router.post('/timetable', auth, async (req, res) => {
 
 router.get('/timetable/:classId', auth, async (req, res) => {
   try {
-    const tt = await Timetable.find({ classId: req.params.classId }).sort({ createdAt: -1 });
+    const tt = await Timetable.find({ classId: req.params.classId }).sort({ date: -1, createdAt: -1 });
     res.json(tt);
   } catch (err) { res.status(500).json({ message: 'Server error' }); }
 });
 
 // Student progress: add and list
+// Student progress: add single
 router.post('/progress', auth, async (req, res) => {
   try {
     if (req.user.role !== 'teacher') return res.status(403).json({ message: 'Forbidden' });
     const teacher = await Teacher.findOne({ userId: req.user.id });
     const { studentId, classId, metrics, remarks, date, examName, subject, marks, outOf } = req.body;
     if (!studentId || !classId) return res.status(400).json({ message: 'studentId and classId required' });
+
+    // Verify teacher access to class
+    const cls = await Class.findOne({
+      _id: classId,
+      $or: [{ 'subjects.teachers': teacher._id }, { 'classTeacher': teacher._id }]
+    });
+    if (!cls) return res.status(403).json({ message: 'You are not assigned to this class' });
+
     const p = new Progress({
       studentId,
       classId,
@@ -177,6 +211,47 @@ router.post('/progress', auth, async (req, res) => {
     });
     await p.save();
     res.json(p);
+  } catch (err) { res.status(400).json({ message: 'Bad request', error: err.message }); }
+});
+
+// Student progress: bulk add
+router.post('/progress/bulk', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'teacher') return res.status(403).json({ message: 'Forbidden' });
+    const teacher = await Teacher.findOne({ userId: req.user.id });
+    if (!teacher) return res.status(404).json({ message: 'Teacher not found' });
+
+    const { classId, examName, subject, outOf, date, records } = req.body;
+    // records: [{ studentId, marks, remarks }]
+
+    if (!classId || !records || !Array.isArray(records)) return res.status(400).json({ message: 'Invalid data' });
+
+    // Verify teacher access to class
+    const cls = await Class.findOne({
+      _id: classId,
+      $or: [{ 'subjects.teachers': teacher._id }, { 'classTeacher': teacher._id }]
+    });
+    if (!cls) return res.status(403).json({ message: 'You are not assigned to this class' });
+
+    const progressDocs = records.map(r => ({
+      studentId: r.studentId,
+      classId,
+      teacherId: teacher._id,
+      examName,
+      subject,
+      date: date || new Date(),
+      outOf: outOf ? Number(outOf) : undefined,
+      marks: r.marks !== '' ? Number(r.marks) : undefined, // allow empty marks
+      absent: !!r.absent,
+      remarks: r.remarks
+    }));
+
+    // Filter out entries with no marks and no remarks to avoid junk? 
+    // The user might want to record '0' or just remarks.
+    // We will save whatever is sent.
+
+    await Progress.insertMany(progressDocs);
+    res.json({ message: 'Progress records saved', count: progressDocs.length });
   } catch (err) { res.status(400).json({ message: 'Bad request', error: err.message }); }
 });
 

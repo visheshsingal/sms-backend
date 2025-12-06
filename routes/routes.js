@@ -23,7 +23,7 @@ function timeToMinutes(t) {
 
 // Create a route
 router.post('/', auth, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
+  if (req.user.role !== 'admin' && req.user.role !== 'bus-incharge') return res.status(403).json({ message: 'Forbidden' });
   try {
     const { name, startTime, endTime, startLocation, bus: busId, stops } = req.body;
     if (!name || !startTime) return res.status(400).json({ message: 'name and startTime required' });
@@ -90,10 +90,10 @@ router.get('/:id', auth, async (req, res) => {
 
 // Update route
 router.put('/:id', auth, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
+  if (req.user.role !== 'admin' && req.user.role !== 'bus-incharge') return res.status(403).json({ message: 'Forbidden' });
   try {
-  const prior = await RouteModel.findById(req.params.id)
-  const { name, startTime, endTime, startLocation, bus: busId, stops } = req.body;
+    const prior = await RouteModel.findById(req.params.id)
+    const { name, startTime, endTime, startLocation, bus: busId, stops } = req.body;
     const update = {};
     if (name) update.name = name;
     if (startTime) update.startTime = startTime;
@@ -156,7 +156,7 @@ router.put('/:id', auth, async (req, res) => {
 
 // Delete route
 router.delete('/:id', auth, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
+  if (req.user.role !== 'admin' && req.user.role !== 'bus-incharge') return res.status(403).json({ message: 'Forbidden' });
   try {
     await RouteModel.findByIdAndDelete(req.params.id);
     // unset route field on any bus that referenced this route

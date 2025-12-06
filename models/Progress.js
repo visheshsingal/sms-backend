@@ -10,6 +10,7 @@ const ProgressSchema = new mongoose.Schema({
   subject: { type: String },
   marks: { type: Number },
   outOf: { type: Number },
+  absent: { type: Boolean, default: false },
   // Keep metrics for backward-compatibility
   metrics: { type: mongoose.Schema.Types.Mixed },
   remarks: { type: String }

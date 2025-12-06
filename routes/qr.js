@@ -8,19 +8,19 @@ const Attendance = require('../models/Attendance');
 const BusAttendance = require('../models/BusAttendance');
 
 // Helper to encode payload into a QR-friendly string (base64 of JSON)
-function encodePayload(payload){
+function encodePayload(payload) {
 	const json = JSON.stringify(payload);
 	return Buffer.from(json).toString('base64');
 }
 
-function decodePayload(raw){
+function decodePayload(raw) {
 	// try plain JSON first
-	try { return JSON.parse(raw); } catch(e){}
+	try { return JSON.parse(raw); } catch (e) { }
 	// try base64 decode
 	try {
 		const json = Buffer.from(raw, 'base64').toString('utf8');
 		return JSON.parse(json);
-	} catch(e) {
+	} catch (e) {
 		throw new Error('Unable to decode QR payload');
 	}
 }
@@ -44,7 +44,7 @@ router.post('/generate/:studentId', auth, async (req, res) => {
 		const token = crypto.randomBytes(16).toString('hex');
 		const issuedAt = new Date();
 		// default expiration 365 days (can be adjusted)
-		const expires = new Date(issuedAt.getTime() + 365*24*60*60*1000);
+		const expires = new Date(issuedAt.getTime() + 365 * 24 * 60 * 60 * 1000);
 
 		student.qrToken = token;
 		student.qrTokenIssuedAt = issuedAt;
@@ -79,7 +79,7 @@ router.post('/generate-me', auth, async (req, res) => {
 
 		const token = crypto.randomBytes(16).toString('hex');
 		const issuedAt = new Date();
-		const expires = new Date(issuedAt.getTime() + 365*24*60*60*1000);
+		const expires = new Date(issuedAt.getTime() + 365 * 24 * 60 * 60 * 1000);
 
 		student.qrToken = token;
 		student.qrTokenIssuedAt = issuedAt;
@@ -110,7 +110,7 @@ router.post('/generate-all', auth, async (req, res) => {
 		for (const student of students) {
 			const token = crypto.randomBytes(16).toString('hex');
 			const issuedAt = new Date();
-			const expires = new Date(issuedAt.getTime() + 365*24*60*60*1000);
+			const expires = new Date(issuedAt.getTime() + 365 * 24 * 60 * 60 * 1000);
 			student.qrToken = token;
 			student.qrTokenIssuedAt = issuedAt;
 			student.qrTokenExpires = expires;
@@ -132,17 +132,17 @@ router.post('/generate-all', auth, async (req, res) => {
 	}
 });
 
-// POST /api/qr/scan  -- scanner posts raw scanned QR text; must be authenticated (driver/teacher)
+// POST /api/qr/scan  -- scanner posts raw scanned QR text; must be authenticated (driver/teacher/bus-incharge)
 router.post('/scan', auth, async (req, res) => {
 	try {
-		const { raw, type: requestedType } = req.body;
+		const { raw, type: requestedType, busId: requestedBusId, session: requestedSession } = req.body;
 		if (!raw) return res.status(400).json({ message: 'Missing raw QR payload' });
-		// only allow drivers or teachers to scan
+		// only allow drivers, teachers, or bus-incharges to scan
 		const scannerRole = req.user.role;
-		if (!['driver', 'teacher'].includes(scannerRole)) return res.status(403).json({ message: 'Only drivers or teachers may scan QR codes' });
+		if (!['driver', 'teacher', 'bus-incharge', 'admin'].includes(scannerRole)) return res.status(403).json({ message: 'Role not authorized to scan QR codes' });
 
 		let payload;
-		try { payload = decodePayload(raw); } catch(e){ return res.status(400).json({ message: 'Invalid QR payload' }); }
+		try { payload = decodePayload(raw); } catch (e) { return res.status(400).json({ message: 'Invalid QR payload' }); }
 
 		const { studentId, token } = payload;
 		if (!studentId || !token) return res.status(400).json({ message: 'QR payload missing required fields' });
@@ -156,11 +156,15 @@ router.post('/scan', auth, async (req, res) => {
 
 		// determine attendance type
 		let type = requestedType;
-		if (!type){
+		if (!type) {
 			if (scannerRole === 'driver') type = 'pickup';
 			else if (scannerRole === 'teacher') type = 'daily';
+			else if (scannerRole === 'bus-incharge') type = 'bus-check';
 			else type = 'other';
 		}
+
+		// determine session (default 'morning' if not provided)
+		const currentSession = requestedSession || 'morning';
 
 		// always log the scan event
 		const attendanceEvent = new StudentAttendance({
@@ -170,49 +174,61 @@ router.post('/scan', auth, async (req, res) => {
 			scannerRole,
 			type,
 			timestamp: new Date(),
-			rawPayload: payload
+			rawPayload: { ...payload, session: currentSession, busId: requestedBusId }
 		});
 		await attendanceEvent.save();
 
-		// If driver scanned, also mark bus attendance for this student's bus (present)
+		// If driver or bus-incharge scanned, mark bus attendance
 		let busAttendanceId = null;
 		let previousBusStatus = null;
-		if (scannerRole === 'driver'){
-			try{
-				// find driver and their bus
-				const Driver = require('../models/Driver');
+		if (scannerRole === 'driver' || scannerRole === 'bus-incharge' || scannerRole === 'admin') {
+			try {
 				const Bus = require('../models/Bus');
-				const driver = await Driver.findOne({ userId: req.user.id });
-				if (driver){
-					const bus = await Bus.findOne({ driver: driver._id });
-					if (bus){
-						// normalize date like driver endpoints: use local date -> UTC midnight
-						const now = new Date();
-						const isoDay = now.toISOString().split('T')[0];
-						const date = new Date(isoDay + 'T00:00:00Z');
-						let ba = await BusAttendance.findOne({ busId: bus._id, date });
-						if (!ba) ba = new BusAttendance({ busId: bus._id, date, records: [] });
-						const sidStr = student._id.toString();
-						const idx = (ba.records||[]).findIndex(r => String(r.studentId) === sidStr);
-						if (idx >= 0){
-							previousBusStatus = ba.records[idx].status || null;
-							ba.records[idx].status = 'present';
-						} else {
-							previousBusStatus = null;
-							ba.records.push({ studentId: student._id, status: 'present' });
-						}
-						await ba.save();
-						busAttendanceId = ba._id;
-					}
+				let bus = null;
+
+				// If busId is explicitly provided (e.g. from Bus Incharge selecting a bus), use it
+				if (requestedBusId) {
+					bus = await Bus.findById(requestedBusId);
 				}
-			}catch(e){ console.warn('Failed to mark bus attendance from QR scan', e.message) }
+				// Otherwise if driver, find their assigned bus
+				else if (scannerRole === 'driver') {
+					const Driver = require('../models/Driver');
+					const driver = await Driver.findOne({ userId: req.user.id });
+					if (driver) bus = await Bus.findOne({ driver: driver._id });
+				}
+
+				if (bus) {
+					// normalize date like driver endpoints: use local date -> UTC midnight
+					const now = new Date();
+					const isoDay = now.toISOString().split('T')[0];
+					const date = new Date(isoDay + 'T00:00:00Z');
+
+					let ba = await BusAttendance.findOne({ busId: bus._id, date, session: currentSession });
+					if (!ba) ba = new BusAttendance({ busId: bus._id, date, session: currentSession, records: [] });
+
+					const sidStr = student._id.toString();
+					const idx = (ba.records || []).findIndex(r => String(r.studentId) === sidStr);
+					if (idx >= 0) {
+						previousBusStatus = ba.records[idx].status || null;
+						ba.records[idx].status = 'present';
+					} else {
+						previousBusStatus = null;
+						ba.records.push({ studentId: student._id, status: 'present' });
+					}
+					await ba.save();
+					busAttendanceId = ba._id;
+				} else if (scannerRole === 'bus-incharge' && !requestedBusId) {
+					// Warning: Bus Incharge scanned but no bus selected/found
+					console.warn('Bus Incharge scanned without selecting a bus');
+				}
+			} catch (e) { console.warn('Failed to mark bus attendance from QR scan', e.message) }
 		}
 
 		// If teacher scanned, mark daily attendance in Attendance collection
 		let attendanceRecordId = null;
 		let attendanceDate = null;
 		let previousAttendanceStatus = null;
-		if (scannerRole === 'teacher'){
+		if (scannerRole === 'teacher') {
 			const classId = student.class ? (student.class._id ? student.class._id : student.class) : null;
 			if (!classId) return res.status(400).json({ message: 'Student not assigned to a class' });
 
@@ -222,13 +238,13 @@ router.post('/scan', auth, async (req, res) => {
 			const date = new Date(isoDay + 'T00:00:00Z');
 
 			let att = await Attendance.findOne({ classId: classId, date });
-			if (!att){
+			if (!att) {
 				att = new Attendance({ classId: classId, date, records: [] });
 			}
 
 			const sidStr = student._id.toString();
 			const idx = att.records.findIndex(r => r.studentId && r.studentId.toString() === sidStr);
-			if (idx >= 0){
+			if (idx >= 0) {
 				previousAttendanceStatus = att.records[idx].status || null;
 				att.records[idx].status = 'present';
 			} else {
