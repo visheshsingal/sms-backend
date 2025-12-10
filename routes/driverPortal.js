@@ -34,9 +34,11 @@ router.get('/me', auth, async (req, res) => {
     }
 
     if (!driver) return res.status(404).json({ message: 'Driver profile not found' });
-    // find assigned bus and populate route with stops and students
-    const bus = await Bus.findOne({ driver: driver._id }).populate({ path: 'route', populate: { path: 'stops.students', select: 'firstName lastName' } });
-    res.json({ driver, bus, route: bus ? bus.route : null });
+    // find assigned buses (driver may be assigned multiple buses)
+    const buses = await Bus.find({ driver: driver._id })
+      .populate({ path: 'route', populate: { path: 'stops.students', select: 'firstName lastName rollNumber class' } });
+    // if exactly one bus, include route top-level for convenience
+    res.json({ driver, buses, route: buses && buses.length === 1 ? buses[0].route : null });
   } catch (err) { console.error('GET /driver/me error:', err); res.status(500).json({ message: 'Server error' }); }
 });
 
@@ -47,7 +49,7 @@ router.post('/ride/start', auth, async (req, res) => {
     let driver = await Driver.findOne({ userId: req.user.id });
     if (!driver) return res.status(403).json({ message: 'Driver profile not found for user' });
 
-    const { lat, lng } = req.body || {};
+    const { lat, lng, busId } = req.body || {};
     const update = {
       'live.active': true,
       'live.startedAt': new Date(),
@@ -55,9 +57,16 @@ router.post('/ride/start', auth, async (req, res) => {
     };
     if (lat != null && lng != null) update['live.lastLocation'] = { lat: Number(lat), lng: Number(lng) };
 
-    const updated = await Bus.findOneAndUpdate({ driver: driver._id }, { $set: update }, { new: true }).select('live');
-    if (!updated) return res.status(400).json({ message: 'No bus assigned to driver' });
-    return res.json({ live: updated.live });
+    // If busId provided, ensure driver owns that bus
+    let query = { driver: driver._id };
+    if (busId) {
+      if (!busId || !/^[0-9a-fA-F]{24}$/.test(busId)) return res.status(400).json({ message: 'Invalid busId' });
+      query = { _id: busId, driver: driver._id };
+    }
+
+    const updated = await Bus.findOneAndUpdate(query, { $set: update }, { new: true }).select('live');
+    if (!updated) return res.status(400).json({ message: 'No matching bus assigned to driver' });
+    return res.json({ live: updated.live, busId: updated._id });
   } catch (err) {
     console.error('POST /driver/ride/start error:', err);
     // include error message to help debugging during development
@@ -70,9 +79,15 @@ router.post('/ride/stop', auth, async (req, res) => {
   try {
     let driver = await Driver.findOne({ userId: req.user.id });
     if (!driver) return res.status(403).json({ message: 'Driver profile not found for user' });
-    const updated = await Bus.findOneAndUpdate({ driver: driver._id }, { $set: { 'live.active': false, 'live.updatedAt': new Date() } }, { new: true }).select('live');
-    if (!updated) return res.status(400).json({ message: 'No bus assigned to driver' });
-    return res.json({ live: updated.live });
+    const { busId } = req.body || {};
+    let query = { driver: driver._id };
+    if (busId) {
+      if (!busId || !/^[0-9a-fA-F]{24}$/.test(busId)) return res.status(400).json({ message: 'Invalid busId' });
+      query = { _id: busId, driver: driver._id };
+    }
+    const updated = await Bus.findOneAndUpdate(query, { $set: { 'live.active': false, 'live.updatedAt': new Date() } }, { new: true }).select('live');
+    if (!updated) return res.status(400).json({ message: 'No matching bus assigned to driver' });
+    return res.json({ live: updated.live, busId: updated._id });
   } catch (err) {
     console.error('POST /driver/ride/stop error:', err);
     res.status(500).json({ message: 'Server error', error: err.message });
@@ -86,10 +101,16 @@ router.post('/ride/location', auth, async (req, res) => {
     if (!driver) return res.status(403).json({ message: 'Driver profile not found for user' });
     const { lat, lng } = req.body || {};
     if (lat == null || lng == null) return res.status(400).json({ message: 'lat and lng required' });
+    const { busId } = req.body || {};
     const update = { 'live.lastLocation': { lat: Number(lat), lng: Number(lng) }, 'live.updatedAt': new Date() };
-    const updated = await Bus.findOneAndUpdate({ driver: driver._id }, { $set: update }, { new: true }).select('live');
-    if (!updated) return res.status(400).json({ message: 'No bus assigned to driver' });
-    return res.json({ live: updated.live });
+    let query = { driver: driver._id };
+    if (busId) {
+      if (!busId || !/^[0-9a-fA-F]{24}$/.test(busId)) return res.status(400).json({ message: 'Invalid busId' });
+      query = { _id: busId, driver: driver._id };
+    }
+    const updated = await Bus.findOneAndUpdate(query, { $set: update }, { new: true }).select('live');
+    if (!updated) return res.status(400).json({ message: 'No matching bus assigned to driver' });
+    return res.json({ live: updated.live, busId: updated._id });
   } catch (err) {
     console.error('POST /driver/ride/location error:', err);
     res.status(500).json({ message: 'Server error', error: err.message });
@@ -101,8 +122,20 @@ router.get('/attendance/students', auth, async (req, res) => {
   try {
     const driver = await Driver.findOne({ userId: req.user.id });
     if (!driver) return res.status(403).json({ message: 'Driver profile not found' });
-    const bus = await Bus.findOne({ driver: driver._id }).populate({ path: 'route', populate: { path: 'stops.students', select: 'firstName lastName rollNumber class' } });
-    if (!bus || !bus.route) return res.status(404).json({ message: 'No route or students assigned to this bus' });
+    // support optional query param busId to select which assigned bus to use
+    const { busId } = req.query;
+    let bus = null;
+    if (busId) {
+      if (!/^[0-9a-fA-F]{24}$/.test(busId)) return res.status(400).json({ message: 'Invalid busId' });
+      bus = await Bus.findOne({ _id: busId, driver: driver._id }).populate({ path: 'route', populate: { path: 'stops.students', select: 'firstName lastName rollNumber class' } });
+      if (!bus) return res.status(404).json({ message: 'No such bus assigned to driver' });
+    } else {
+      // if multiple buses, require explicit busId
+      const buses = await Bus.find({ driver: driver._id }).populate({ path: 'route', populate: { path: 'stops.students', select: 'firstName lastName rollNumber class' } });
+      if (!buses.length) return res.status(404).json({ message: 'No route or students assigned to this driver' });
+      if (buses.length === 1) bus = buses[0];
+      else return res.status(400).json({ message: 'Multiple buses assigned. Supply busId query parameter.' });
+    }
 
     const students = [];
     for (const stop of (bus.route.stops || [])) {
@@ -119,10 +152,21 @@ router.post('/attendance', auth, async (req, res) => {
   try {
     const driver = await Driver.findOne({ userId: req.user.id });
     if (!driver) return res.status(403).json({ message: 'Driver profile not found' });
-    const bus = await Bus.findOne({ driver: driver._id });
-    if (!bus) return res.status(404).json({ message: 'No bus assigned to this driver' });
+    const { busId, date: dateIn, records, session = 'morning' } = req.body;
 
-    const { date: dateIn, records, session = 'morning' } = req.body;
+    // require busId when driver has multiple buses
+    let bus = null;
+    if (busId) {
+      if (!/^[0-9a-fA-F]{24}$/.test(busId)) return res.status(400).json({ message: 'Invalid busId' });
+      bus = await Bus.findOne({ _id: busId, driver: driver._id });
+      if (!bus) return res.status(404).json({ message: 'No such bus assigned to this driver' });
+    } else {
+      const buses = await Bus.find({ driver: driver._id });
+      if (!buses.length) return res.status(404).json({ message: 'No bus assigned to this driver' });
+      if (buses.length === 1) bus = buses[0];
+      else return res.status(400).json({ message: 'Multiple buses assigned. Supply busId in request body.' });
+    }
+
     const dateIso = dateIn ? new Date(dateIn).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
     const date = new Date(dateIso + 'T00:00:00Z');
 
@@ -143,7 +187,7 @@ router.post('/attendance', auth, async (req, res) => {
       } catch (e) { console.warn('failed writing studentAttendance event', e.message) }
     }
 
-    return res.json({ message: 'Bus attendance saved', busAttendanceId: ba._id });
+    return res.json({ message: 'Bus attendance saved', busAttendanceId: ba._id, busId: bus._id });
   } catch (err) { console.error(err); res.status(500).json({ message: 'Server error', error: err.message }); }
 });
 
@@ -152,11 +196,20 @@ router.get('/attendance', auth, async (req, res) => {
   try {
     const driver = await Driver.findOne({ userId: req.user.id });
     if (!driver) return res.status(403).json({ message: 'Driver profile not found' });
-    const bus = await Bus.findOne({ driver: driver._id });
-    if (!bus) return res.status(404).json({ message: 'No bus assigned' });
-
-    const { date: dateIn, session = 'morning' } = req.query;
+    const { busId, date: dateIn, session = 'morning' } = req.query;
     if (!dateIn) return res.status(400).json({ message: 'Date required' });
+
+    let bus = null;
+    if (busId) {
+      if (!/^[0-9a-fA-F]{24}$/.test(busId)) return res.status(400).json({ message: 'Invalid busId' });
+      bus = await Bus.findOne({ _id: busId, driver: driver._id });
+      if (!bus) return res.status(404).json({ message: 'No such bus assigned to this driver' });
+    } else {
+      const buses = await Bus.find({ driver: driver._id });
+      if (!buses.length) return res.status(404).json({ message: 'No bus assigned' });
+      if (buses.length === 1) bus = buses[0];
+      else return res.status(400).json({ message: 'Multiple buses assigned. Supply busId query parameter.' });
+    }
 
     const dateIso = new Date(dateIn).toISOString().split('T')[0];
     const date = new Date(dateIso + 'T00:00:00Z');
@@ -171,10 +224,20 @@ router.get('/attendance/report', auth, async (req, res) => {
   try {
     const driver = await Driver.findOne({ userId: req.user.id });
     if (!driver) return res.status(403).json({ message: 'Driver profile not found' });
-    const bus = await Bus.findOne({ driver: driver._id }).populate({ path: 'route', populate: { path: 'stops.students', select: 'firstName lastName rollNumber' } });
-    if (!bus) return res.status(404).json({ message: 'No bus assigned' });
+    const { busId, startDate, endDate, session } = req.query;
 
-    const { startDate, endDate, session } = req.query;
+    let bus = null;
+    if (busId) {
+      if (!/^[0-9a-fA-F]{24}$/.test(busId)) return res.status(400).json({ message: 'Invalid busId' });
+      bus = await Bus.findOne({ _id: busId, driver: driver._id }).populate({ path: 'route', populate: { path: 'stops.students', select: 'firstName lastName rollNumber' } });
+      if (!bus) return res.status(404).json({ message: 'No such bus assigned to driver' });
+    } else {
+      const buses = await Bus.find({ driver: driver._id }).populate({ path: 'route', populate: { path: 'stops.students', select: 'firstName lastName rollNumber' } });
+      if (!buses.length) return res.status(404).json({ message: 'No bus assigned' });
+      if (buses.length === 1) bus = buses[0];
+      else return res.status(400).json({ message: 'Multiple buses assigned. Supply busId query parameter.' });
+    }
+
     const query = { busId: bus._id };
     if (startDate && endDate) query.date = { $gte: new Date(startDate), $lte: new Date(endDate) };
     if (session) query.session = session;
